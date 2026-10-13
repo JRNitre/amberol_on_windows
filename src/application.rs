@@ -80,6 +80,10 @@ mod imp {
             obj.set_accels_for_action("win.next", &["<primary>n"]);
             obj.set_accels_for_action("win.play", &["<primary>p"]);
             obj.set_accels_for_action("win.copy", &["<primary>c"]);
+            obj.set_accels_for_action("win.mini", &["<primary>m"]);
+            obj.set_accels_for_action("win.show-lyrics", &["<primary>y"]);
+            obj.set_accels_for_action("win.favorite", &["<primary>d"]);
+            obj.set_accels_for_action("win.topmost", &["<primary>t"]);
         }
     }
 
@@ -100,7 +104,10 @@ mod imp {
                         if let Some(display) = gtk::gdk::Display::default() {
                             let icon_theme = gtk::IconTheme::for_display(&display);
                             icon_theme.add_search_path(&icons_dir);
-                            debug!("Bundled Amberol icon available: {}", icon_theme.has_icon(APPLICATION_ID));
+                            debug!(
+                                "Bundled Amberol icon available: {}",
+                                icon_theme.has_icon(APPLICATION_ID)
+                            );
                         }
                     }
                 }
@@ -113,6 +120,12 @@ mod imp {
             debug!("Application::activate");
 
             self.obj().present_main_window();
+        }
+
+        fn shutdown(&self) {
+            crate::session::save(&self.player);
+            self.player.stop();
+            self.parent_shutdown();
         }
 
         fn open(&self, files: &[gio::File], _hint: &str) {
@@ -196,8 +209,8 @@ impl Application {
     }
 
     fn present_main_window(&self) {
-        let window = if let Some(window) = self.active_window() {
-            window
+        let window = if let Some(window) = self.windows().first() {
+            window.clone()
         } else {
             let window = Window::new(self);
             window.upcast()
@@ -214,6 +227,12 @@ impl Application {
         self.add_action_entries([
             gio::ActionEntry::builder("quit")
                 .activate(|app: &Application, _, _| {
+                    crate::session::save(&app.player());
+                    for window in app.windows() {
+                        if let Some(window) = window.downcast_ref::<Window>() {
+                            window.release_background();
+                        }
+                    }
                     app.quit();
                 })
                 .build(),

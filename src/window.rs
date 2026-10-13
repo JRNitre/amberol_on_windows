@@ -3,10 +3,12 @@
 
 use std::{
     cell::{Cell, RefCell},
+    convert::TryFrom,
     rc::Rc,
     time::Instant,
 };
 
+use adw::prelude::{MessageDialogExt, MessageDialogExtManual};
 use adw::subclass::prelude::*;
 use glib::{clone, closure_local};
 use gtk::{gdk, gio, glib, prelude::*, CompositeTemplate};
@@ -72,6 +74,24 @@ mod imp {
         pub add_folder_button: TemplateChild<gtk::Button>,
         #[template_child]
         pub restore_playlist_button: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub main_box: TemplateChild<gtk::Box>,
+        #[template_child]
+        pub lyrics_box: TemplateChild<gtk::Box>,
+        #[template_child]
+        pub lyric_current: TemplateChild<gtk::Label>,
+        #[template_child]
+        pub lyric_next: TemplateChild<gtk::Label>,
+        #[template_child]
+        pub lyric_offset: TemplateChild<gtk::SpinButton>,
+
+        pub mini: Cell<bool>,
+        pub full_size: Cell<(i32, i32)>,
+        pub restoring: RefCell<Option<serde_json::Value>>,
+        pub lyric_lines: RefCell<Vec<crate::lyrics::Line>>,
+        pub background_hold: RefCell<Option<gio::ApplicationHoldGuard>>,
+        #[cfg(target_os = "windows")]
+        pub tray: RefCell<Option<crate::windows_integration::Tray>>,
 
         pub provider: gtk::CssProvider,
         pub settings: gio::Settings,
@@ -197,6 +217,18 @@ mod imp {
                 status_page: TemplateChild::default(),
                 add_folder_button: TemplateChild::default(),
                 restore_playlist_button: TemplateChild::default(),
+                main_box: TemplateChild::default(),
+                lyrics_box: TemplateChild::default(),
+                lyric_current: TemplateChild::default(),
+                lyric_next: TemplateChild::default(),
+                lyric_offset: TemplateChild::default(),
+                mini: Cell::new(false),
+                full_size: Cell::new((600, 700)),
+                restoring: RefCell::new(None),
+                lyric_lines: RefCell::new(Vec::new()),
+                background_hold: RefCell::new(None),
+                #[cfg(target_os = "windows")]
+                tray: RefCell::new(None),
                 playlist_view: TemplateChild::default(),
                 playlist_shuffled: Cell::new(false),
                 playlist_visible: Cell::new(true),
@@ -292,6 +324,7 @@ impl Window {
         win.connect_signals();
         win.restore_window_state();
         win.set_initial_state();
+        win.setup_extensions();
 
         win
     }
@@ -306,6 +339,499 @@ impl Window {
         }
 
         None
+    }
+
+    fn setup_extensions(&self) {
+        self.add_css_class("amberol-window");
+        for key in [
+            "glass-background",
+            "restore-session",
+            "resume-playing",
+            "show-lyrics",
+            "fade-playback",
+        ] {
+            let key = key.to_owned();
+            let setting = key.clone();
+            self.add_action_entries([gio::ActionEntry::builder(&key)
+                .state(self.imp().settings.boolean(&key).to_variant())
+                .activate(move |win: &Window, action, _| {
+                    let enabled = !action
+                        .state()
+                        .and_then(|s| s.get::<bool>())
+                        .unwrap_or(false);
+                    action.set_state(&enabled.to_variant());
+                    let _ = win.imp().settings.set_boolean(&setting, enabled);
+                    win.refresh_glass();
+                    win.imp().lyrics_box.set_visible(
+                        win.imp().settings.boolean("show-lyrics") && !win.imp().mini.get(),
+                    );
+                    win.fit_lyrics();
+                })
+                .build()]);
+        }
+        self.add_action_entries([
+            gio::ActionEntry::builder("mini")
+                .state(false.to_variant())
+                .activate(|win: &Window, action, _| {
+                    let mini = !win.imp().mini.get();
+                    win.set_mini(mini);
+                    action.set_state(&mini.to_variant());
+                })
+                .build(),
+            gio::ActionEntry::builder("topmost")
+                .state(false.to_variant())
+                .activate(|win: &Window, action, _| {
+                    let enabled = !action
+                        .state()
+                        .and_then(|s| s.get::<bool>())
+                        .unwrap_or(false);
+                    if crate::windows_integration::topmost(win, enabled) {
+                        action.set_state(&enabled.to_variant());
+                    } else {
+                        win.add_toast("当前系统不支持窗口置顶".into());
+                    }
+                })
+                .build(),
+            gio::ActionEntry::builder("favorite")
+                .activate(|win: &Window, _, _| {
+                    win.toggle_favorite();
+                })
+                .build(),
+            gio::ActionEntry::builder("favorites")
+                .activate(|win: &Window, _, _| {
+                    win.load_playlist_path(&crate::library::directory().join("favorites.m3u8"));
+                })
+                .build(),
+            gio::ActionEntry::builder("save-playlist")
+                .activate(|win: &Window, _, _| {
+                    win.save_named_playlist();
+                })
+                .build(),
+            gio::ActionEntry::builder("open-playlist")
+                .activate(|win: &Window, _, _| {
+                    win.choose_named_playlist();
+                })
+                .build(),
+            gio::ActionEntry::builder("import-playlist")
+                .activate(|win: &Window, _, _| {
+                    win.playlist_dialog(false);
+                })
+                .build(),
+            gio::ActionEntry::builder("export-playlist")
+                .activate(|win: &Window, _, _| {
+                    win.playlist_dialog(true);
+                })
+                .build(),
+            gio::ActionEntry::builder("recent-folder")
+                .activate(|win: &Window, _, _| {
+                    win.open_recent_folder();
+                })
+                .build(),
+            gio::ActionEntry::builder("sleep")
+                .parameter_type(Some(glib::VariantTy::UINT32))
+                .activate(|win: &Window, _, value| {
+                    if let (Some(player), Some(minutes)) =
+                        (win.player(), value.and_then(u32::from_variant))
+                    {
+                        player.set_sleep_timer(minutes);
+                        win.add_toast(if minutes == 0 {
+                            "已取消睡眠定时".into()
+                        } else {
+                            format!("将在 {minutes} 分钟后暂停")
+                        });
+                    }
+                })
+                .build(),
+            gio::ActionEntry::builder("loop-a")
+                .activate(|win: &Window, _, _| {
+                    if let Some(p) = win.player() {
+                        p.set_loop_a();
+                        win.add_toast("已标记 A 点".into());
+                    }
+                })
+                .build(),
+            gio::ActionEntry::builder("loop-b")
+                .activate(|win: &Window, _, _| {
+                    if let Some(p) = win.player() {
+                        win.add_toast(
+                            if p.set_loop_b() {
+                                "A–B 循环已开始"
+                            } else {
+                                "请先标记 A 点，然后在更晚的位置标记 B 点"
+                            }
+                            .into(),
+                        );
+                    }
+                })
+                .build(),
+            gio::ActionEntry::builder("loop-clear")
+                .activate(|win: &Window, _, _| {
+                    if let Some(p) = win.player() {
+                        p.clear_loop();
+                        win.add_toast("已取消 A–B 循环".into());
+                    }
+                })
+                .build(),
+        ]);
+        self.imp()
+            .lyrics_box
+            .set_visible(self.imp().settings.boolean("show-lyrics"));
+        self.imp()
+            .lyric_offset
+            .connect_value_changed(clone!(@weak self as win => move |_| { win.update_lyrics(); }));
+        self.connect_map(clone!(@weak self as win => move |_| {
+            win.refresh_glass();
+            win.fit_lyrics();
+            #[cfg(target_os = "windows")]
+            if win.imp().tray.borrow().is_none() { win.imp().tray.replace(crate::windows_integration::Tray::new(&win)); }
+            win.imp().background_hold.replace(None);
+        }));
+        adw::StyleManager::default().connect_notify_local(
+            None,
+            clone!(@weak self as win => move |_, _| { win.refresh_glass(); }),
+        );
+        let mut last_save = Instant::now();
+        glib::timeout_add_seconds_local(
+            1,
+            clone!(@weak self as win => @default-return glib::ControlFlow::Break, move || {
+                if let Some(player) = win.player() {
+                    player.check_sleep_timer();
+                    if last_save.elapsed().as_secs() >= 10 && win.imp().restoring.borrow().is_none() {
+                        crate::session::save(&player); last_save = Instant::now();
+                    }
+                }
+                glib::ControlFlow::Continue
+            }),
+        );
+        if self.imp().settings.boolean("restore-session") {
+            glib::idle_add_local_once(clone!(@weak self as win => move || {
+                if win.player().map(|p| p.queue().is_empty()).unwrap_or(false) { win.restore_playlist(); }
+            }));
+        }
+    }
+
+    pub fn release_background(&self) {
+        self.imp().background_hold.replace(None);
+        #[cfg(target_os = "windows")]
+        self.imp().tray.replace(None);
+    }
+
+    fn fit_lyrics(&self) {
+        if self.imp().settings.boolean("show-lyrics") && !self.imp().mini.get() {
+            let (width, height) = self.default_size();
+            if height < 860 {
+                self.set_default_size(width, 860);
+                glib::idle_add_local_once(clone!(@weak self as win => move || {
+                    crate::windows_integration::resize(&win, width, 860);
+                }));
+            }
+        }
+    }
+
+    fn refresh_glass(&self) {
+        let enabled = self.imp().settings.boolean("glass-background")
+            && !adw::StyleManager::default().is_high_contrast();
+        let native = crate::windows_integration::backdrop(self, enabled) && enabled;
+        for (class, active) in [("glass", enabled), ("native-glass", native)] {
+            if active {
+                self.add_css_class(class);
+            } else {
+                self.remove_css_class(class);
+            }
+        }
+        if let Some(player) = self.player() {
+            self.update_style(player.state().current_song().as_ref());
+        }
+    }
+
+    fn set_mini(&self, mini: bool) {
+        if mini == self.imp().mini.replace(mini) {
+            return;
+        }
+        if mini {
+            self.imp().full_size.set(self.default_size());
+            self.unmaximize();
+            self.set_size_request(360, 390);
+            self.imp().main_stack.set_vhomogeneous(false);
+            self.imp().main_stack.set_hhomogeneous(false);
+            self.set_playlist_visible(false);
+            self.imp().playlist_view.set_visible(false);
+            self.imp()
+                .song_cover
+                .album_image()
+                .set_cover_size(crate::cover_picture::CoverSize::Small);
+            self.add_css_class("mini");
+            self.imp().playback_control.set_margin_bottom(0);
+            self.set_default_size(380, 390);
+        } else {
+            self.remove_css_class("mini");
+            self.set_size_request(360, 740);
+            self.imp().playlist_view.set_visible(true);
+            self.imp()
+                .song_cover
+                .album_image()
+                .set_cover_size(crate::cover_picture::CoverSize::Large);
+            self.imp().playback_control.set_margin_bottom(24);
+            let (w, h) = self.imp().full_size.get();
+            self.set_default_size(w, h);
+        }
+        self.imp().song_details.album_label().set_visible(!mini);
+        self.imp()
+            .playback_control
+            .volume_control()
+            .set_visible(!mini);
+        self.imp()
+            .lyrics_box
+            .set_visible(!mini && self.imp().settings.boolean("show-lyrics"));
+        let size = if mini {
+            (380, 390)
+        } else {
+            self.imp().full_size.get()
+        };
+        glib::idle_add_local_once(clone!(@weak self as win => move || {
+            crate::windows_integration::resize(&win, size.0, size.1);
+        }));
+    }
+
+    fn finish_restore(&self) {
+        let Some(data) = self.imp().restoring.take() else {
+            return;
+        };
+        let Some(player) = self.player() else {
+            return;
+        };
+        let queue = player.queue();
+        let mode = match data["repeat"].as_str() {
+            Some("repeat-all") => RepeatMode::RepeatAll,
+            Some("repeat-one") => RepeatMode::RepeatOne,
+            _ => RepeatMode::Consecutive,
+        };
+        queue.set_repeat_mode(mode);
+        if let Some(order) = data["shuffle"].as_array() {
+            let order: Option<Vec<u32>> = order
+                .iter()
+                .map(|v| v.as_u64().and_then(|i| u32::try_from(i).ok()))
+                .collect();
+            if let Some(order) = order {
+                if queue.restore_shuffle(&order) || {
+                    queue.set_shuffled(true);
+                    queue.is_shuffled()
+                } {
+                    self.imp().playlist_shuffled.set(true);
+                    self.notify("playlist-shuffled");
+                }
+            }
+        }
+        let current = data["current"].as_str();
+        if let Some(index) = (0..queue.n_songs()).find(|&i| {
+            queue
+                .song_at(i)
+                .map(|s| Some(s.uri().as_str()) == current)
+                .unwrap_or(false)
+        }) {
+            player.skip_to(index);
+            player.restore_position(data["position"].as_u64().unwrap_or(0));
+        }
+        player.set_volume(
+            data["volume"]
+                .as_f64()
+                .filter(|v| v.is_finite())
+                .unwrap_or(1.0)
+                .clamp(0.0, 1.0),
+        );
+        if self.imp().settings.boolean("resume-playing") {
+            player.play();
+        }
+        self.add_toast("已恢复上次的歌曲与播放进度".into());
+    }
+
+    fn load_lyrics(&self) {
+        self.imp().lyric_offset.set_value(0.0);
+        let lines = self
+            .player()
+            .and_then(|p| p.state().current_song())
+            .and_then(|s| s.file().path())
+            .and_then(|p| std::fs::read_to_string(p.with_extension("lrc")).ok())
+            .map(|s| crate::lyrics::parse(&s))
+            .unwrap_or_default();
+        self.imp().lyric_lines.replace(lines);
+        self.update_lyrics();
+    }
+
+    fn update_lyrics(&self) {
+        let position = self
+            .player()
+            .map(|p| p.state().position_ms() as i64)
+            .unwrap_or(0);
+        let lines = self.imp().lyric_lines.borrow();
+        if lines.is_empty() {
+            self.imp().lyric_current.set_label("未找到同名 LRC 歌词");
+            self.imp().lyric_next.set_label("");
+            return;
+        }
+        let index =
+            crate::lyrics::current(&lines, position, self.imp().lyric_offset.value() as i64);
+        self.imp()
+            .lyric_current
+            .set_label(index.map(|i| lines[i].text.as_str()).unwrap_or("♪"));
+        self.imp().lyric_next.set_label(
+            lines
+                .get(index.map(|i| i + 1).unwrap_or(0))
+                .map(|l| l.text.as_str())
+                .unwrap_or(""),
+        );
+    }
+
+    fn queue_uris(&self) -> Vec<String> {
+        self.player()
+            .map(|p| {
+                (0..p.queue().n_songs())
+                    .filter_map(|i| p.queue().song_at(i))
+                    .map(|s| s.uri())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn load_playlist_path(&self, path: &std::path::Path) {
+        match crate::library::read_m3u(path) {
+            Ok(files) if !files.is_empty() => self.queue_songs(files),
+            Ok(_) => self.add_toast("歌单中没有可访问的本地歌曲".into()),
+            Err(err) => self.add_toast(format!("无法读取歌单：{err}")),
+        }
+    }
+
+    fn toggle_favorite(&self) {
+        let Some(song) = self.player().and_then(|p| p.state().current_song()) else {
+            return;
+        };
+        let dir = crate::library::directory();
+        let path = dir.join("favorites.m3u8");
+        let mut uris: Vec<_> = crate::library::read_m3u(&path)
+            .unwrap_or_default()
+            .iter()
+            .map(|f| f.uri().to_string())
+            .collect();
+        let uri = song.uri();
+        let removed = uris.contains(&uri);
+        if removed {
+            uris.retain(|u| u != &uri);
+        } else {
+            uris.push(uri);
+        }
+        let result =
+            std::fs::create_dir_all(dir).and_then(|_| crate::library::write_m3u(&path, &uris));
+        self.add_toast(match result {
+            Ok(_) => if removed {
+                "已取消收藏"
+            } else {
+                "已收藏当前歌曲"
+            }
+            .into(),
+            Err(e) => format!("保存收藏失败：{e}"),
+        });
+    }
+
+    fn save_named_playlist(&self) {
+        if self.queue_uris().is_empty() {
+            self.add_toast("请先添加歌曲".into());
+            return;
+        }
+        let dialog = adw::MessageDialog::new(
+            Some(self),
+            Some("保存歌单"),
+            Some("为当前播放队列取一个名字"),
+        );
+        let entry = gtk::Entry::builder()
+            .placeholder_text("例如：夜晚")
+            .activates_default(true)
+            .build();
+        dialog.set_extra_child(Some(&entry));
+        dialog.add_responses(&[("cancel", "取消"), ("save", "保存")]);
+        dialog.set_default_response(Some("save"));
+        dialog.set_close_response("cancel");
+        dialog.connect_response(None, clone!(@weak self as win => move |dialog, response| {
+            if response == "save" {
+                let Some(path) = crate::library::named_path(&entry.text()) else { win.add_toast("歌单名称为空或包含不支持的字符".into()); return; };
+                if path.exists() { win.add_toast("已有同名歌单，请换一个名字".into()); return; }
+                let result = std::fs::create_dir_all(crate::library::directory()).and_then(|_| crate::library::write_m3u(&path, &win.queue_uris()));
+                win.add_toast(match result { Ok(_) => "歌单已保存".into(), Err(e) => format!("保存失败：{e}") });
+            }
+            dialog.close();
+        }));
+        dialog.present();
+    }
+
+    fn choose_named_playlist(&self) {
+        let lists = crate::library::playlists();
+        if lists.is_empty() {
+            self.add_toast("还没有保存的歌单".into());
+            return;
+        }
+        let dialog =
+            adw::MessageDialog::new(Some(self), Some("打开歌单"), Some("歌曲将加入当前队列"));
+        let names: Vec<_> = lists.iter().map(|(name, _)| name.as_str()).collect();
+        let chooser = gtk::DropDown::from_strings(&names);
+        dialog.set_extra_child(Some(&chooser));
+        dialog.add_responses(&[("cancel", "取消"), ("open", "打开")]);
+        dialog.set_default_response(Some("open"));
+        dialog.set_close_response("cancel");
+        dialog.connect_response(None, clone!(@weak self as win => move |dialog, response| {
+            if response == "open" { if let Some((_, path)) = lists.get(chooser.selected() as usize) { win.load_playlist_path(path); } }
+            dialog.close();
+        }));
+        dialog.present();
+    }
+
+    fn playlist_dialog(&self, export: bool) {
+        let uris = self.queue_uris();
+        if export && uris.is_empty() {
+            self.add_toast("请先添加歌曲".into());
+            return;
+        }
+        glib::MainContext::default().spawn_local(clone!(@weak self as win => async move {
+            let filter = gtk::FileFilter::new(); filter.set_name(Some("M3U / M3U8")); filter.add_pattern("*.m3u"); filter.add_pattern("*.m3u8");
+            let filters = gio::ListStore::new::<gtk::FileFilter>(); filters.append(&filter);
+            let dialog = gtk::FileDialog::builder().title(if export { "导出歌单" } else { "导入歌单" }).filters(&filters).build();
+            let file = if export { dialog.set_initial_name(Some("Amberol.m3u8")); dialog.save_future(Some(&win)).await } else { dialog.open_future(Some(&win)).await };
+            if let Ok(file) = file { if let Some(path) = file.path() {
+                if export { win.add_toast(match crate::library::write_m3u(&path, &uris) { Ok(_) => "歌单已导出".into(), Err(e) => format!("导出失败：{e}") }); }
+                else { win.load_playlist_path(&path); }
+            } }
+        }));
+    }
+
+    fn open_recent_folder(&self) {
+        let folders: Vec<String> = self
+            .imp()
+            .settings
+            .strv("recent-folders")
+            .iter()
+            .map(|s| s.to_string())
+            .filter(|p| std::path::Path::new(p).is_dir())
+            .collect();
+        if folders.is_empty() {
+            self.add_toast("还没有最近打开的文件夹".into());
+            return;
+        }
+        let dialog = adw::MessageDialog::new(
+            Some(self),
+            Some("最近打开的文件夹"),
+            Some("歌曲将加入当前队列"),
+        );
+        let names: Vec<_> = folders.iter().map(|s| s.as_str()).collect();
+        let chooser = gtk::DropDown::from_strings(&names);
+        dialog.set_extra_child(Some(&chooser));
+        dialog.add_responses(&[("cancel", "取消"), ("open", "打开")]);
+        dialog.set_default_response(Some("open"));
+        dialog.set_close_response("cancel");
+        dialog.connect_response(None, clone!(@weak self as win => move |dialog, response| {
+            if response == "open" { if let Some(path) = folders.get(chooser.selected() as usize) {
+                win.queue_songs(utils::load_files_from_folder(&gio::File::for_path(path), true));
+            } }
+            dialog.close();
+        }));
+        dialog.present();
     }
 
     fn setup_actions(&self) {
@@ -354,7 +880,7 @@ impl Window {
         let settings = utils::settings_manager();
         let width = settings.int("window-width");
         let height = settings.int("window-height");
-        self.set_default_size(width, height);
+        self.set_default_size(width.max(360), height.max(740));
     }
 
     fn reset_queue(&self) {
@@ -367,6 +893,8 @@ impl Window {
     fn clear_queue(&self) {
         if let Some(p) = self.player() {
             p.clear_queue();
+            utils::store_playlist(p.queue());
+            crate::session::save(&p);
         }
     }
 
@@ -449,6 +977,7 @@ impl Window {
             let filter = gtk::FileFilter::new();
             gtk::FileFilter::set_name(&filter, Some(&i18n("Audio files")));
             filter.add_mime_type("audio/*");
+            for pattern in utils::AUDIO_PATTERNS { filter.add_pattern(pattern); filter.add_pattern(&pattern.to_ascii_uppercase()); }
             filters.append(&filter);
 
             let dialog = gtk::FileDialog::builder()
@@ -488,6 +1017,29 @@ impl Window {
     }
 
     fn restore_playlist(&self) {
+        if self
+            .player()
+            .map(|p| !p.queue().is_empty())
+            .unwrap_or(false)
+        {
+            return;
+        }
+        if let Some(session) = crate::session::load() {
+            let files = session["songs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(gio::File::for_uri)
+                .filter(|f| f.path().map(|p| p.is_file()).unwrap_or(false))
+                .collect::<Vec<_>>();
+            if files.is_empty() {
+                return;
+            }
+            self.imp().restoring.replace(Some(session));
+            self.queue_songs(files);
+            return;
+        }
         if let Some(songs) = utils::load_cached_songs() {
             self.queue_songs(songs);
         }
@@ -527,7 +1079,7 @@ impl Window {
                         if let Ok(s) = Song::from_uri(f.uri().as_str()) {
                             if let Some(player) = win.player() {
                                 let queue = player.queue();
-                                if queue.contains(&s) {
+                                if queue.contains(&s) || songs.iter().any(|song: &Song| song.equals(&s)) {
                                     duplicates += 1;
                                 } else {
                                     songs.push(s);
@@ -546,6 +1098,8 @@ impl Window {
                         win.action_set_enabled("queue.clear", true);
 
                         if songs.is_empty() {
+                            win.imp().restoring.replace(None);
+                            win.imp().playlist_view.end_loading();
                             if duplicates == 0 {
                                 win.add_toast(i18n("No songs found"));
                             }
@@ -559,7 +1113,7 @@ impl Window {
                             queue.add_songs(&songs);
 
                             // Store the current state of the playlist
-                            utils::store_playlist(queue);
+                            if win.imp().restoring.borrow().is_none() { utils::store_playlist(queue); }
 
                             debug!("Queue was empty: {}, new size: {}", was_empty, queue.n_songs());
                             if was_empty {
@@ -567,7 +1121,9 @@ impl Window {
                             }
 
                             // Allow jumping to the song we just added
-                            if songs.len() == 1 {
+                            if win.imp().restoring.borrow().is_some() {
+                                win.finish_restore();
+                            } else if songs.len() == 1 {
                                 // If we added a single song, and the queue was empty, we
                                 // dispense with the pleasantries and we start playing
                                 // immediately; otherwise, we let the user choose whether
@@ -615,15 +1171,44 @@ impl Window {
             ) {
                 match info.file_type() {
                     gio::FileType::Regular => {
-                        if let Some(content_type) = info.content_type() {
-                            if gio::content_type_is_mime_type(&content_type, "audio/*") {
-                                debug!("Adding file '{}' to the queue", file.uri());
-                                queue.push(file);
+                        if file
+                            .path()
+                            .and_then(|p| {
+                                p.extension()
+                                    .map(|s| s.to_string_lossy().to_ascii_lowercase())
+                            })
+                            .map(|s| s == "m3u" || s == "m3u8")
+                            .unwrap_or(false)
+                        {
+                            if let Some(path) = file.path() {
+                                if let Ok(files) = crate::library::read_m3u(&path) {
+                                    queue.extend(files);
+                                }
                             }
+                            continue;
+                        }
+                        if utils::is_audio_file(&file, info.content_type().as_deref()) {
+                            debug!("Adding file '{}' to the queue", file.uri());
+                            queue.push(file);
                         }
                     }
                     gio::FileType::Directory => {
                         debug!("Adding folder '{}' to the queue", file.uri());
+                        if let Some(path) = file.path() {
+                            let path = path.to_string_lossy().to_string();
+                            let mut recent: Vec<String> = self
+                                .imp()
+                                .settings
+                                .strv("recent-folders")
+                                .iter()
+                                .map(|s| s.to_string())
+                                .filter(|s| *s != path)
+                                .collect();
+                            recent.insert(0, path);
+                            recent.truncate(8);
+                            let recent: Vec<&str> = recent.iter().map(|s| s.as_str()).collect();
+                            let _ = self.imp().settings.set_strv("recent-folders", recent);
+                        }
                         let files = utils::load_files_from_folder(&file, true);
                         queue.extend(files);
                     }
@@ -914,8 +1499,14 @@ impl Window {
 
         self.connect_close_request(move |window| {
             debug!("Saving window state");
-            let width = window.default_size().0;
-            let height = window.default_size().1;
+            if let Some(player) = window.player() {
+                crate::session::save(&player);
+            }
+            let (width, height) = if window.imp().mini.get() {
+                window.imp().full_size.get()
+            } else {
+                window.default_size()
+            };
 
             let settings = utils::settings_manager();
             settings
@@ -924,6 +1515,15 @@ impl Window {
             settings
                 .set_int("window-height", height)
                 .expect("Unable to stop window-height");
+
+            #[cfg(target_os = "windows")]
+            if window.imp().tray.borrow().is_some() && settings.boolean("background-play") {
+                if let Some(app) = window.application() {
+                    window.imp().background_hold.replace(Some(app.hold()));
+                    window.set_visible(false);
+                    return glib::Propagation::Stop;
+                }
+            }
 
             window.unbind_queue();
             window.unbind_state();
@@ -1160,6 +1760,7 @@ impl Window {
     }
 
     fn update_position_labels(&self) {
+        self.update_lyrics();
         if let Some(player) = self.player() {
             let state = player.state();
             if state.current_song().is_some() {
@@ -1168,7 +1769,11 @@ impl Window {
                 let remaining = duration.checked_sub(elapsed).unwrap_or_default();
                 self.set_song_time(Some(elapsed), Some(remaining));
 
-                let position = state.position() as f64 / state.duration() as f64;
+                let position = if state.duration() > 0 {
+                    state.position() as f64 / state.duration() as f64
+                } else {
+                    0.0
+                };
                 self.set_song_position(position);
             } else {
                 self.set_song_time(None, None);
@@ -1178,6 +1783,7 @@ impl Window {
     }
 
     fn update_song(&self) {
+        self.load_lyrics();
         if let Some(player) = self.player() {
             let state = player.state();
             self.scroll_playlist_to_song();
@@ -1290,8 +1896,10 @@ impl Window {
     fn update_style(&self, song: Option<&Song>) {
         let imp = self.imp();
 
-        if !imp.settings.boolean("enable-recoloring") {
-            imp.provider.load_from_data("");
+        if !imp.settings.boolean("enable-recoloring")
+            || adw::StyleManager::default().is_high_contrast()
+        {
+            imp.provider.load_from_data("@define-color background_color_0 @window_bg_color; @define-color background_color_1 @window_bg_color; @define-color background_color_2 @window_bg_color;");
             imp.main_stack.remove_css_class("main-window");
             return;
         }
@@ -1306,7 +1914,7 @@ impl Window {
                     css.push_str(&s);
                 }
 
-                for i in n_colors - 1..5 {
+                for i in n_colors..5 {
                     css.push_str(&format!(
                         "@define-color background_color_{} @window_bg_color;",
                         i
@@ -1324,7 +1932,7 @@ impl Window {
             }
         }
 
-        imp.provider.load_from_data("");
+        imp.provider.load_from_data("@define-color background_color_0 @window_bg_color; @define-color background_color_1 @window_bg_color; @define-color background_color_2 @window_bg_color;");
         imp.main_stack.remove_css_class("main-window");
         self.action_set_enabled("win.enable-recoloring", false);
     }

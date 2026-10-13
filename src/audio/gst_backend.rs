@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use async_channel::Sender;
-use glib::clone;
 use gst::prelude::*;
-use gtk::glib;
-use log::{debug, error, warn};
+use gtk::{glib, prelude::*};
+use log::{debug, error};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -15,10 +14,16 @@ use crate::audio::{PlaybackAction, ReplayGainMode, SeekDirection};
 
 #[derive(Debug)]
 pub struct GstBackend {
-    sender: Sender<PlaybackAction>,
-    gst_player: gst_player::Player,
+    pipeline: gst::Element,
     replaygain: Option<GstReplayGain>,
     desired_volume: Arc<AtomicU64>,
+    gain: Arc<AtomicU64>,
+    generation: Arc<AtomicU64>,
+    next_uri: Arc<std::sync::Mutex<Option<String>>>,
+    queued_uri: Arc<std::sync::Mutex<Option<String>>>,
+    pending_seek: Arc<AtomicU64>,
+    watch: Option<gst::bus::BusWatchGuard>,
+    tick: Option<glib::SourceId>,
 }
 
 #[derive(Debug)]
@@ -69,161 +74,237 @@ impl GstReplayGain {
 
 impl GstBackend {
     pub fn new(sender: Sender<PlaybackAction>) -> Self {
-        let dispatcher = gst_player::PlayerGMainContextSignalDispatcher::new(None);
-        let gst_player = gst_player::Player::new(
-            None::<gst_player::PlayerVideoRenderer>,
-            Some(dispatcher.upcast::<gst_player::PlayerSignalDispatcher>()),
+        let pipeline = gst::ElementFactory::make("playbin")
+            .build()
+            .expect("Missing playbin");
+        pipeline.set_property_from_str("flags", "audio");
+        #[cfg(test)]
+        pipeline.set_property(
+            "audio-sink",
+            gst::ElementFactory::make("fakesink")
+                .property("sync", true)
+                .build()
+                .unwrap(),
         );
-        gst_player.set_video_track_enabled(false);
-
-        let mut config = gst_player.config();
-        config.set_position_update_interval(250);
-        gst_player.set_config(config).unwrap();
-
-        let res = Self {
-            sender,
-            gst_player,
+        let desired_volume = Arc::new(AtomicU64::new(1.0_f64.to_bits()));
+        let gain = Arc::new(AtomicU64::new(1.0_f64.to_bits()));
+        let generation = Arc::new(AtomicU64::new(0));
+        let next_uri = Arc::new(std::sync::Mutex::new(None::<String>));
+        let queued_uri = Arc::new(std::sync::Mutex::new(None::<String>));
+        let pending_seek = Arc::new(AtomicU64::new(u64::MAX));
+        let upcoming = next_uri.clone();
+        let queued = queued_uri.clone();
+        pipeline.connect("about-to-finish", false, move |values| {
+            let pipeline = values[0].get::<gst::Element>().unwrap();
+            if let Some(uri) = upcoming.lock().unwrap().take() {
+                *queued.lock().unwrap() = Some(uri.clone());
+                pipeline.set_property("uri", &uri);
+            }
+            None
+        });
+        let bus = pipeline.bus().unwrap();
+        let bus_pipeline = pipeline.clone();
+        let bus_sender = sender.clone();
+        let seek = pending_seek.clone();
+        let queued = queued_uri.clone();
+        let watch = bus
+            .add_watch_local(move |_, message| {
+                match message.view() {
+                    gst::MessageView::Eos(_) => {
+                        let _ = bus_sender.send_blocking(PlaybackAction::PlayNext);
+                    }
+                    gst::MessageView::Error(err) => {
+                        error!("Playback error: {} ({:?})", err.error(), err.debug());
+                        let _ = bus_sender.send_blocking(PlaybackAction::Stop);
+                    }
+                    gst::MessageView::StreamStart(_) => {
+                        if let Some(uri) = queued.lock().unwrap().take() {
+                            let _ = bus_sender.send_blocking(PlaybackAction::StreamStarted(uri));
+                        }
+                    }
+                    gst::MessageView::AsyncDone(_) => {
+                        let position = seek.swap(u64::MAX, Ordering::Relaxed);
+                        if position != u64::MAX {
+                            let _ = bus_pipeline.seek_simple(
+                                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+                                gst::ClockTime::from_seconds(position),
+                            );
+                        }
+                    }
+                    _ => (),
+                }
+                glib::ControlFlow::Continue
+            })
+            .unwrap();
+        let tick_pipeline = pipeline.clone();
+        let tick_sender = sender.clone();
+        let tick = glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
+            if let Some(position) = tick_pipeline.query_position::<gst::ClockTime>() {
+                let _ = tick_sender
+                    .send_blocking(PlaybackAction::UpdatePositionMs(position.mseconds()));
+            }
+            glib::ControlFlow::Continue
+        });
+        Self {
+            pipeline,
             replaygain: GstReplayGain::new().ok(),
-            desired_volume: Arc::new(AtomicU64::new(1.0_f64.to_bits())),
-        };
-
-        res.setup_signals();
-
-        res
+            desired_volume,
+            gain,
+            generation,
+            next_uri,
+            queued_uri,
+            pending_seek,
+            watch: Some(watch),
+            tick: Some(tick),
+        }
     }
 
-    fn setup_signals(&self) {
-        self.gst_player.connect_error(
-            clone!(@strong self.sender as sender => move |_, err| {
-                error!("GStreamer playback error: {err}");
-                if let Err(send_err) = sender.send_blocking(PlaybackAction::Stop) {
-                    error!("Failed to send Stop after playback error: {send_err}");
-                }
-            }),
-        );
-
-        self.gst_player.connect_warning(move |_, warn| {
-            warn!("GStreamer warning: {}", warn);
-        });
-
-        self.gst_player
-            .connect_end_of_stream(clone!(@strong self.sender as sender => move |_| {
-                if let Err(e) = sender.send_blocking(PlaybackAction::PlayNext) {
-                    error!("Failed to send PlayNext: {e}");
-                }
-            }));
-
-        self.gst_player.connect_position_updated(
-            clone!(@strong self.sender as sender => move |_, clock| {
-                if let Some(clock) = clock {
-                    let pos = clock.seconds();
-                    if let Err(e) = sender.send_blocking(PlaybackAction::UpdatePosition(pos)) {
-                        error!("Failed to send UpdatePosition({pos}): {e}");
-                    }
-                }
-            }),
-        );
-
-        self.gst_player.connect_volume_changed(
-            clone!(@strong self.sender as sender, @strong self.desired_volume as desired_volume => move |player| {
-                let volume = gst_audio::StreamVolume::convert_volume(
-                    gst_audio::StreamVolumeFormat::Linear,
-                    gst_audio::StreamVolumeFormat::Cubic,
-                    player.volume(),
-                );
-                let desired = f64::from_bits(desired_volume.load(Ordering::Relaxed));
-                if (volume - desired).abs() > 0.005 {
-                    // A new playbin may report its default volume before the
-                    // requested volume has been applied. Keep the UI and the
-                    // next track at the user's chosen level.
-                    player.set_volume(gst_audio::StreamVolume::convert_volume(
-                        gst_audio::StreamVolumeFormat::Cubic,
-                        gst_audio::StreamVolumeFormat::Linear,
-                        desired,
-                    ));
-                    return;
-                }
-                if let Err(e) = sender.send_blocking(PlaybackAction::VolumeChanged(volume)) {
-                    error!("Failed to send VolumeChanged({volume}): {e}");
-                }
-            }),
-        );
+    pub fn set_next_uri(&self, uri: Option<String>) {
+        *self.next_uri.lock().unwrap() = uri;
     }
 
     pub fn set_song_uri(&self, uri: Option<&str>) {
-        // FIXME: https://gitlab.freedesktop.org/gstreamer/gstreamer/-/issues/1124
-        if uri.is_some() {
-            self.gst_player.set_uri(uri);
-            self.restore_volume();
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.gain.store(1.0f64.to_bits(), Ordering::Relaxed);
+        *self.next_uri.lock().unwrap() = None;
+        let _ = self.pipeline.set_state(gst::State::Ready);
+        *self.queued_uri.lock().unwrap() = None;
+        self.pending_seek.store(u64::MAX, Ordering::Relaxed);
+        if let Some(uri) = uri {
+            self.pipeline.set_property("uri", uri);
         }
+        self.restore_volume();
+    }
+
+    pub fn restore_position(&self, position: u64) {
+        self.pending_seek.store(position, Ordering::Relaxed);
+        let _ = self.pipeline.set_state(gst::State::Paused);
     }
 
     pub fn seek(&self, position: u64, duration: u64, offset: u64, direction: SeekDirection) {
-        let offset = gst::ClockTime::from_seconds(offset);
-        let position = gst::ClockTime::from_seconds(position);
-        let duration = gst::ClockTime::from_seconds(duration);
-
         let destination = match direction {
-            SeekDirection::Backwards if position >= offset => position.checked_sub(offset),
-            SeekDirection::Backwards if position < offset => Some(gst::ClockTime::from_seconds(0)),
-            SeekDirection::Forward if !duration.is_zero() && position + offset <= duration => {
-                position.checked_add(offset)
-            }
-            SeekDirection::Forward if !duration.is_zero() && position + offset > duration => {
-                Some(duration)
-            }
-            _ => None,
+            SeekDirection::Backwards => position.saturating_sub(offset),
+            SeekDirection::Forward => position.saturating_add(offset).min(duration),
         };
-
-        if let Some(destination) = destination {
-            self.gst_player.seek(destination);
+        self.seek_position(destination);
+    }
+    pub fn seek_position(&self, position: u64) {
+        if let Err(err) = self.pipeline.seek_simple(
+            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+            gst::ClockTime::from_seconds(position),
+        ) {
+            debug!("Seek failed: {err}");
         }
     }
-
-    pub fn seek_position(&self, position: u64) {
-        self.gst_player.seek(gst::ClockTime::from_seconds(position));
-    }
-
     pub fn seek_start(&self) {
-        self.gst_player.seek(gst::ClockTime::from_seconds(0));
+        self.seek_position(0);
     }
 
+    fn fade(&self, target: f64, pause_after: bool) {
+        let token = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let generation = self.generation.clone();
+        let gain = self.gain.clone();
+        let volume = self.desired_volume.clone();
+        let pipeline = self.pipeline.clone();
+        let start = f64::from_bits(gain.load(Ordering::Relaxed));
+        let began = std::time::Instant::now();
+        glib::timeout_add_local(std::time::Duration::from_millis(20), move || {
+            if token != generation.load(Ordering::Relaxed) {
+                return glib::ControlFlow::Break;
+            }
+            let t = (began.elapsed().as_secs_f64() / 0.18).min(1.0);
+            let level = start + (target - start) * t;
+            gain.store(level.to_bits(), Ordering::Relaxed);
+            let desired = f64::from_bits(volume.load(Ordering::Relaxed));
+            let linear = gst_audio::StreamVolume::convert_volume(
+                gst_audio::StreamVolumeFormat::Cubic,
+                gst_audio::StreamVolumeFormat::Linear,
+                desired,
+            ) * level;
+            pipeline.set_property("volume", linear);
+            if t >= 1.0 {
+                if pause_after {
+                    let _ = pipeline.set_state(gst::State::Paused);
+                }
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
     pub fn play(&self) {
-        self.gst_player.play();
-        self.restore_volume();
+        if crate::utils::settings_manager().boolean("fade-playback") {
+            // A fresh track starts at zero; reversing a pending pause starts at its current gain.
+            if self.pipeline.current_state() != gst::State::Playing {
+                self.gain.store(0f64.to_bits(), Ordering::Relaxed);
+            }
+            self.restore_volume();
+            let _ = self.pipeline.set_state(gst::State::Playing);
+            self.fade(1.0, false);
+        } else {
+            self.generation.fetch_add(1, Ordering::Relaxed);
+            self.gain.store(1f64.to_bits(), Ordering::Relaxed);
+            self.restore_volume();
+            let _ = self.pipeline.set_state(gst::State::Playing);
+        }
     }
-
     pub fn pause(&self) {
-        self.gst_player.pause();
+        if crate::utils::settings_manager().boolean("fade-playback")
+            && self.pipeline.current_state() == gst::State::Playing
+        {
+            self.fade(0.0, true);
+        } else {
+            self.generation.fetch_add(1, Ordering::Relaxed);
+            let _ = self.pipeline.set_state(gst::State::Paused);
+        }
     }
-
     pub fn stop(&self) {
-        self.gst_player.stop();
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        *self.next_uri.lock().unwrap() = None;
+        *self.queued_uri.lock().unwrap() = None;
+        let _ = self.pipeline.set_state(gst::State::Ready);
     }
-
     pub fn set_volume(&self, volume: f64) {
-        self.desired_volume.store(volume.to_bits(), Ordering::Relaxed);
+        self.desired_volume
+            .store(volume.to_bits(), Ordering::Relaxed);
         self.restore_volume();
     }
-
     fn restore_volume(&self) {
-        let volume = f64::from_bits(self.desired_volume.load(Ordering::Relaxed));
-        let linear_volume = gst_audio::StreamVolume::convert_volume(
+        let desired = f64::from_bits(self.desired_volume.load(Ordering::Relaxed));
+        let gain = f64::from_bits(self.gain.load(Ordering::Relaxed));
+        let linear = gst_audio::StreamVolume::convert_volume(
             gst_audio::StreamVolumeFormat::Cubic,
             gst_audio::StreamVolumeFormat::Linear,
-            volume,
-        );
-        debug!("Setting volume to: {}", &linear_volume);
-        self.gst_player.set_volume(linear_volume);
+            desired,
+        ) * gain;
+        self.pipeline.set_property("volume", linear);
     }
-
     pub fn set_replaygain(&self, replaygain: ReplayGainMode) {
         if let Some(ref r) = self.replaygain {
-            r.set_mode(self.gst_player.pipeline(), replaygain);
+            r.set_mode(self.pipeline.clone(), replaygain);
         }
     }
-
     pub fn replaygain_available(&self) -> bool {
         self.replaygain.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn actual_volume(&self) -> f64 {
+        self.pipeline.property("volume")
+    }
+
+    #[cfg(test)]
+    pub fn actual_state(&self) -> gst::State {
+        self.pipeline.current_state()
+    }
+}
+impl Drop for GstBackend {
+    fn drop(&mut self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        if let Some(tick) = self.tick.take() {
+            tick.remove();
+        }
+        self.watch.take();
+        let _ = self.pipeline.set_state(gst::State::Null);
     }
 }

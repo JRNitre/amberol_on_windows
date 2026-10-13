@@ -24,10 +24,11 @@ impl InhibitController {
 
 impl Controller for InhibitController {
     fn set_playback_state(&self, playback_state: &PlaybackState) {
-        let app = gio::Application::default()
-            .expect("Failed to retrieve application singleton")
-            .downcast::<gtk::Application>()
-            .unwrap();
+        let Some(app) =
+            gio::Application::default().and_then(|app| app.downcast::<gtk::Application>().ok())
+        else {
+            return;
+        };
         let win = app
             .active_window()
             .map(|win| win.downcast::<gtk::Window>().unwrap());

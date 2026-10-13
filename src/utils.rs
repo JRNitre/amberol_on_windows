@@ -19,6 +19,31 @@ pub fn settings_manager() -> gio::Settings {
     gio::Settings::new(app_id)
 }
 
+pub const AUDIO_PATTERNS: &[&str] = &[
+    "*.mp3", "*.flac", "*.wav", "*.ogg", "*.opus", "*.m4a", "*.aac", "*.wma", "*.aiff", "*.aif",
+];
+
+pub fn is_audio_file(file: &gio::File, content_type: Option<&str>) -> bool {
+    if content_type
+        .and_then(gio::content_type_get_mime_type)
+        .map(|mime| mime.starts_with("audio/"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    file.path()
+        .and_then(|p| {
+            p.extension()
+                .map(|s| s.to_string_lossy().to_ascii_lowercase())
+        })
+        .map(|extension| {
+            AUDIO_PATTERNS
+                .iter()
+                .any(|pattern| pattern[2..] == extension)
+        })
+        .unwrap_or(false)
+}
+
 pub fn format_remaining_time(t: i64) -> String {
     // We use an explicit LRM character so the MINUS SIGN character
     // stays in front of the remaining time even in RTL locales, instead

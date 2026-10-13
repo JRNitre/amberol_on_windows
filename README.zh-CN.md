@@ -10,6 +10,8 @@
 
 ## 使用便携包
 
+功能拓展分支还提供封面取色的透明磨砂背景、托盘、迷你窗口、本地歌词、收藏与歌单、状态恢复和连续播放。使用方式、兼容性及验证范围见 [Windows 功能说明](docs/WINDOWS_FEATURES.zh-CN.md)。
+
 1. 获取 `amberol-windows-portable.zip`。本地测试包可能放在 `release/`，该目录不纳入 Git 历史。
 2. 完整解压 ZIP。
 3. 双击解压目录中的 `Amberol.exe`。

@@ -92,6 +92,25 @@ impl Queue {
         self.imp().model.as_ref()
     }
 
+    pub fn canonical_songs(&self) -> Vec<Song> {
+        (0..self.imp().store.n_items())
+            .filter_map(|i| self.imp().store.item(i)?.downcast::<Song>().ok())
+            .collect()
+    }
+
+    pub fn shuffle_order(&self) -> Option<Vec<u32>> {
+        self.imp().model.order()
+    }
+
+    pub fn restore_shuffle(&self, order: &[u32]) -> bool {
+        if self.imp().model.restore_order(order) {
+            self.imp().shuffled.set(true);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn song_at(&self, pos: u32) -> Option<Song> {
         if let Some(song) = self.imp().model.item(pos) {
             return Some(song.downcast::<Song>().unwrap());
@@ -140,13 +159,19 @@ impl Queue {
     }
 
     pub fn add_songs(&self, songs: &[impl IsA<glib::Object>]) {
+        let current = self.current_song();
         self.imp()
             .store
             .splice(self.imp().model.n_items(), 0, songs);
+        if self.is_shuffled() {
+            self.imp().model.reshuffle(0);
+            self.set_current_song(current);
+        }
         self.notify("n-songs");
     }
 
     pub fn remove_song(&self, song: &Song) {
+        let current = self.current_song();
         let was_shuffled = self.imp().model.shuffled();
         let n_songs = self.n_songs();
         for pos in 0..n_songs {
@@ -167,6 +192,7 @@ impl Queue {
             if was_shuffled {
                 self.imp().model.reshuffle(0);
             }
+            self.set_current_song(current.filter(|s| self.contains(s)));
             self.notify("n-songs");
         }
 
@@ -236,6 +262,16 @@ impl Queue {
         }
     }
 
+    pub fn peek_next_song(&self) -> Option<Song> {
+        let current = self.current_song_index()?;
+        let next = match self.repeat_mode() {
+            RepeatMode::RepeatOne => current,
+            RepeatMode::RepeatAll if current + 1 >= self.n_songs() => 0,
+            _ => current + 1,
+        };
+        self.song_at(next)
+    }
+
     pub fn repeat_mode(&self) -> RepeatMode {
         self.imp().repeat_mode.get()
     }
@@ -282,6 +318,7 @@ impl Queue {
                 self.imp().model.unshuffle();
                 self.set_current_song(current_song);
             }
+            self.notify("current");
         }
     }
 

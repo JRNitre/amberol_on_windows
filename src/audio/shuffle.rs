@@ -134,9 +134,29 @@ impl ShuffleListModel {
         self.imp().shuffle.borrow().is_some()
     }
 
+    pub fn order(&self) -> Option<Vec<u32>> {
+        self.imp().shuffle.borrow().clone()
+    }
+
+    pub fn restore_order(&self, order: &[u32]) -> bool {
+        let n = self.n_items();
+        let mut sorted = order.to_vec();
+        sorted.sort_unstable();
+        if sorted != (0..n).collect::<Vec<_>>() {
+            return false;
+        }
+        self.imp().shuffle.replace(Some(order.to_vec()));
+        self.items_changed(0, n, n);
+        true
+    }
+
     pub fn reshuffle(&self, anchor: u32) {
         if let Some(ref model) = *self.imp().model.borrow() {
             let n_songs = model.n_items();
+            if n_songs == 0 {
+                self.imp().shuffle.replace(Some(Vec::new()));
+                return;
+            }
             let mut rng = thread_rng();
 
             let positions: Vec<u32> = if anchor == 0 {

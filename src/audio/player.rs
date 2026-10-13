@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     fmt::{self, Display, Formatter},
     rc::Rc,
 };
 
 use async_channel::{Receiver, Sender};
 use glib::clone;
-use gtk::glib;
+use gtk::{glib, prelude::*};
 use log::{debug, error};
 
 use crate::{
@@ -28,11 +28,12 @@ pub enum PlaybackAction {
     SkipPrevious,
     SkipNext,
 
-    UpdatePosition(u64),
+    UpdatePositionMs(u64),
     VolumeChanged(f64),
     Repeat(RepeatMode),
     Seek(u64),
     PlayNext,
+    StreamStarted(String),
 
     Raise,
 }
@@ -117,6 +118,9 @@ pub struct AudioPlayer {
     queue: Queue,
     state: PlayerState,
     waveform_generator: WaveformGenerator,
+    loop_a: Cell<Option<u64>>,
+    loop_b: Cell<Option<u64>>,
+    sleep_deadline: Cell<Option<std::time::Instant>>,
 }
 
 impl fmt::Debug for AudioPlayer {
@@ -155,9 +159,22 @@ impl AudioPlayer {
             queue,
             state,
             waveform_generator,
+            loop_a: Cell::new(None),
+            loop_b: Cell::new(None),
+            sleep_deadline: Cell::new(None),
         });
 
         res.clone().setup_channel();
+        res.state.connect_notify_local(
+            Some("song"),
+            clone!(@weak res => move |_, _| {
+                res.clear_loop(); res.refresh_next();
+            }),
+        );
+        res.queue.connect_notify_local(
+            None,
+            clone!(@weak res => move |_, _| { res.refresh_next(); }),
+        );
 
         res
     }
@@ -168,15 +185,19 @@ impl AudioPlayer {
 
     fn setup_channel(self: Rc<Self>) {
         let receiver = self.receiver.borrow_mut().take().unwrap();
-
-        glib::MainContext::default().spawn_local(clone!(@strong self as this => async move {
+        let weak = Rc::downgrade(&self);
+        glib::MainContext::default().spawn_local(async move {
             use futures::prelude::*;
 
             let mut receiver = std::pin::pin!(receiver);
             while let Some(action) = receiver.next().await {
-                this.process_action(action);
+                if let Some(this) = weak.upgrade() {
+                    this.process_action(action);
+                } else {
+                    break;
+                }
             }
-        }));
+        });
     }
 
     fn process_action(&self, action: PlaybackAction) -> glib::ControlFlow {
@@ -186,9 +207,10 @@ impl AudioPlayer {
             PlaybackAction::Stop => self.set_playback_state(PlaybackState::Stopped),
             PlaybackAction::SkipPrevious => self.skip_previous(),
             PlaybackAction::SkipNext => self.skip_next(),
-            PlaybackAction::UpdatePosition(pos) => self.update_position(pos),
-            PlaybackAction::VolumeChanged(vol) => self.update_volume(vol),
+            PlaybackAction::UpdatePositionMs(pos) => self.update_position(pos),
+            PlaybackAction::VolumeChanged(vol) => self.set_volume(vol),
             PlaybackAction::PlayNext => self.play_next(),
+            PlaybackAction::StreamStarted(uri) => self.stream_started(&uri),
             PlaybackAction::Raise => self.present(),
             PlaybackAction::Repeat(mode) => self.update_repeat_mode(mode),
             PlaybackAction::Seek(pos) => self.seek_position_abs(pos),
@@ -252,6 +274,83 @@ impl AudioPlayer {
 
     fn play_next(&self) {
         self.skip_next();
+    }
+
+    fn refresh_next(&self) {
+        self.backend.set_next_uri(if self.loop_b.get().is_none() {
+            self.queue.peek_next_song().map(|s| s.uri())
+        } else {
+            None
+        });
+    }
+
+    fn stream_started(&self, uri: &str) {
+        if let Some(index) = (0..self.queue.n_songs()).find(|&i| {
+            self.queue
+                .song_at(i)
+                .map(|s| s.uri() == uri)
+                .unwrap_or(false)
+        }) {
+            if let Some(current) = self.state.current_song() {
+                current.set_playing(false);
+            }
+            if let Some(song) = self.queue.skip_song(index) {
+                song.set_playing(true);
+                for c in &self.controllers {
+                    c.set_song(&song);
+                }
+                self.state.set_current_song(Some(song));
+            }
+        }
+        self.refresh_next();
+    }
+
+    pub fn restore_position(&self, position: u64) {
+        let position = position.min(self.state.duration().saturating_sub(1));
+        self.backend.restore_position(position);
+        self.state.set_playback_state(&PlaybackState::Paused);
+        self.state.set_position(position);
+    }
+
+    pub fn set_sleep_timer(&self, minutes: u32) {
+        self.sleep_deadline.set(if minutes == 0 {
+            None
+        } else {
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(minutes as u64 * 60))
+        });
+    }
+    pub fn check_sleep_timer(&self) {
+        if self
+            .sleep_deadline
+            .get()
+            .map(|t| std::time::Instant::now() >= t)
+            .unwrap_or(false)
+        {
+            self.sleep_deadline.set(None);
+            self.pause();
+        }
+    }
+    pub fn set_loop_a(&self) {
+        self.loop_a.set(Some(self.state.position()));
+        self.loop_b.set(None);
+        self.refresh_next();
+    }
+    pub fn set_loop_b(&self) -> bool {
+        if let Some(a) = self.loop_a.get() {
+            let b = self.state.position();
+            if b > a {
+                self.loop_b.set(Some(b));
+                self.refresh_next();
+                self.seek_position_abs(a);
+                return true;
+            }
+        }
+        false
+    }
+    pub fn clear_loop(&self) {
+        self.loop_a.set(None);
+        self.loop_b.set(None);
+        self.refresh_next();
     }
 
     pub fn toggle_play(&self) {
@@ -372,7 +471,14 @@ impl AudioPlayer {
             return;
         }
 
-        if Some(pos) == self.queue.current_song_index() {
+        if Some(pos) == self.queue.current_song_index()
+            && self
+                .queue
+                .song_at(pos)
+                .zip(self.state.current_song())
+                .map(|(a, b)| a.equals(&b))
+                .unwrap_or(false)
+        {
             return;
         }
 
@@ -463,10 +569,16 @@ impl AudioPlayer {
     }
 
     fn update_position(&self, position: u64) {
-        self.state.set_position(position);
+        if let (Some(a), Some(b)) = (self.loop_a.get(), self.loop_b.get()) {
+            if self.state.playing() && position / 1000 >= b {
+                self.backend.seek_position(a);
+                return;
+            }
+        }
+        self.state.set_position_ms(position);
 
         for c in &self.controllers {
-            c.set_position(position);
+            c.set_position(position / 1000);
         }
     }
 
@@ -476,7 +588,13 @@ impl AudioPlayer {
     }
 
     pub fn set_volume(&self, volume: f64) {
+        let volume = if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
         self.backend.set_volume(volume);
+        self.update_volume(volume);
     }
 
     pub fn toggle_repeat_mode(&self) {
@@ -536,5 +654,113 @@ impl AudioPlayer {
 
     pub fn replaygain_available(&self) -> bool {
         self.backend.replaygain_available()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn spin(context: &glib::MainContext, milliseconds: u64) {
+        let end = std::time::Instant::now() + std::time::Duration::from_millis(milliseconds);
+        while std::time::Instant::now() < end {
+            while context.pending() {
+                context.iteration(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    fn wave(path: &std::path::Path) {
+        let length = 8000u32 * 2 * 2;
+        let mut data = Vec::new();
+        data.extend(b"RIFF");
+        data.extend((36 + length).to_le_bytes());
+        data.extend(b"WAVEfmt ");
+        data.extend(16u32.to_le_bytes());
+        data.extend(1u16.to_le_bytes());
+        data.extend(1u16.to_le_bytes());
+        data.extend(8000u32.to_le_bytes());
+        data.extend(16000u32.to_le_bytes());
+        data.extend(2u16.to_le_bytes());
+        data.extend(16u16.to_le_bytes());
+        data.extend(b"data");
+        data.extend(length.to_le_bytes());
+        data.resize(data.len() + length as usize, 0);
+        std::fs::write(path, data).unwrap();
+    }
+    #[test]
+    fn continuous_playback_pause_volume_and_restore() {
+        gst::init().unwrap();
+        let context = glib::MainContext::default();
+        let _guard = context.acquire().unwrap();
+        let dir = std::env::temp_dir().join(format!("amberol-playback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("first.wav");
+        let second = dir.join("second.wav");
+        wave(&first);
+        wave(&second);
+        let a = Song::from_uri(&gtk::gio::File::for_path(&first).uri()).unwrap();
+        let b = Song::from_uri(&gtk::gio::File::for_path(&second).uri()).unwrap();
+        let (sender, _) = async_channel::unbounded();
+        let player = AudioPlayer::new(sender);
+        player.queue.add_songs(&[a.clone(), b.clone()]);
+        player.skip_to(0);
+        player.set_volume(0.31);
+        player.play();
+        spin(&context, 2400);
+        assert_eq!(
+            player.state.current_song().unwrap().uri(),
+            b.uri(),
+            "gapless handoff updates metadata"
+        );
+        assert_eq!(player.queue.current_song_index(), Some(1));
+        assert!(player.state.playing());
+        assert!((player.state.volume() - 0.31).abs() < 0.001);
+        assert!((player.backend.actual_volume() - 0.31f64.powi(3)).abs() < 0.001);
+        player.pause();
+        spin(&context, 300);
+        assert!(!player.state.playing());
+        assert_eq!(player.backend.actual_state(), gst::State::Paused);
+        assert!(player.backend.actual_volume() < 0.001);
+        player.skip_to(0);
+        player.restore_position(1);
+        spin(&context, 400);
+        assert_eq!(
+            player.state.position(),
+            1,
+            "restored progress survives preroll"
+        );
+        let order = vec![1, 0];
+        assert!(player.queue.restore_shuffle(&order));
+        assert_eq!(player.queue.song_at(0).unwrap().uri(), b.uri());
+        assert!(!player.queue.restore_shuffle(&[0, 0]));
+        player.skip_to(0);
+        assert_eq!(
+            player.state.current_song().unwrap().uri(),
+            b.uri(),
+            "restored shuffle selects the matching song"
+        );
+        player.queue.remove_song(&a);
+        assert_eq!(
+            player.queue.current_song().unwrap().uri(),
+            b.uri(),
+            "removing an earlier song preserves the current song"
+        );
+        player.queue.set_repeat_mode(RepeatMode::RepeatOne);
+        player.play();
+        spin(&context, 2400);
+        assert_eq!(player.state.current_song().unwrap().uri(), b.uri());
+        assert!(
+            player.state.position() < 2,
+            "repeat-one starts the next cycle"
+        );
+        player.sleep_deadline.set(Some(std::time::Instant::now()));
+        player.check_sleep_timer();
+        assert!(!player.state.playing(), "sleep deadline pauses playback");
+        player.stop();
+        drop(player);
+        spin(&context, 100);
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_file(second).unwrap();
+        std::fs::remove_dir(dir).unwrap();
     }
 }

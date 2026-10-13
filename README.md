@@ -10,6 +10,8 @@ The port provides native Windows playback, Windows media controls, a seekable wa
 
 ## Run the portable build
 
+The feature branch adds album-tinted Acrylic, a tray, a mini player, local LRC lyrics, favorites and playlists, playback session restoration, and continuous playback. See the [Windows feature notes (Chinese)](docs/WINDOWS_FEATURES.zh-CN.md) for usage and validation limits.
+
 1. Obtain `amberol-windows-portable.zip`. A local test package may be present in `release/`; this directory is intentionally excluded from Git.
 2. Extract the ZIP completely.
 3. Double-click `Amberol.exe` in the extracted folder.
