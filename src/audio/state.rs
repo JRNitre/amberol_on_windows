@@ -20,7 +20,6 @@ mod imp {
     pub struct PlayerState {
         pub playback_state: Cell<PlaybackState>,
         pub position: Cell<u64>,
-        pub position_ms: Cell<u64>,
         pub current_song: RefCell<Option<Song>>,
         pub volume: Cell<f64>,
     }
@@ -34,7 +33,6 @@ mod imp {
             Self {
                 playback_state: Cell::new(PlaybackState::Stopped),
                 position: Cell::new(0),
-                position_ms: Cell::new(0),
                 current_song: RefCell::new(None),
                 volume: Cell::new(1.0),
             }
@@ -157,7 +155,6 @@ impl PlayerState {
     pub fn set_current_song(&self, song: Option<Song>) {
         self.imp().current_song.replace(song);
         self.imp().position.replace(0);
-        self.imp().position_ms.replace(0);
         self.notify("song");
         self.notify("title");
         self.notify("artist");
@@ -172,18 +169,7 @@ impl PlayerState {
     }
 
     pub fn set_position(&self, position: u64) {
-        self.imp().position_ms.set(position.saturating_mul(1000));
         self.imp().position.replace(position);
-        self.notify("position");
-    }
-
-    pub fn position_ms(&self) -> u64 {
-        self.imp().position_ms.get()
-    }
-
-    pub fn set_position_ms(&self, position: u64) {
-        self.imp().position_ms.set(position);
-        self.imp().position.set(position / 1000);
         self.notify("position");
     }
 

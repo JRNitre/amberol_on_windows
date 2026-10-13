@@ -20,10 +20,7 @@ mod utils;
 mod volume_control;
 mod waveform_view;
 mod window;
-mod library;
-mod lyrics;
 mod session;
-mod windows_integration;
 
 use std::env;
 

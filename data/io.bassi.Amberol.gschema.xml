@@ -6,12 +6,9 @@
     <value nick="off" value="2"/>
   </enum>
 	<schema id="io.bassi.Amberol" path="/io/bassi/Amberol/">
-    <key name="glass-background" type="b"><default>true</default></key>
     <key name="restore-session" type="b"><default>true</default></key>
     <key name="resume-playing" type="b"><default>false</default></key>
-    <key name="show-lyrics" type="b"><default>false</default></key>
     <key name="fade-playback" type="b"><default>true</default></key>
-    <key name="recent-folders" type="as"><default>[]</default></key>
 	  <key name="window-width" type="i">
 	    <default>600</default>
 	  </key>

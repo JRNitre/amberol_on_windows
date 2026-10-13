@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <interface>
-  <requires lib="gtk" version="4.0" />
+  <requires lib="gtk" version="4.0"/>
   <template class="AmberolWindow" parent="AdwApplicationWindow">
     <property name="handle-menubar-accel">true</property>
     <property name="width-request">360</property>
-    <property name="height-request">740</property>
+    <property name="height-request">660</property>
     <property name="default-width">800</property>
     <property name="content">
       <object class="GtkWindowHandle">
@@ -12,8 +12,10 @@
           <object class="DragOverlay" id="drag_overlay">
             <property name="title" translatable="yes">Drop a song to add it to the playlist</property>
             <property name="child">
+
               <object class="AdwToastOverlay" id="toast_overlay">
                 <property name="child">
+
                   <object class="GtkStack" id="main_stack">
                     <property name="transition-type">crossfade</property>
                     <child>
@@ -21,11 +23,13 @@
                         <property name="name">initial-view</property>
                         <property name="child">
                           <object class="AdwToolbarView">
+
                             <child type="top">
                               <object class="AdwHeaderBar">
                                 <property name="show-title">false</property>
                               </object>
                             </child>
+
                             <property name="content">
                               <object class="AdwClamp">
                                 <property name="maximum-size">450</property>
@@ -48,8 +52,8 @@
                                             <property name="label" translatable="yes">Restore Playlist</property>
                                             <property name="action-name">queue.restore-playlist</property>
                                             <style>
-                                              <class name="suggested-action" />
-                                              <class name="pill" />
+                                              <class name="suggested-action"/>
+                                              <class name="pill"/>
                                             </style>
                                           </object>
                                         </child>
@@ -58,7 +62,7 @@
                                             <property name="label" translatable="yes">Add Folder</property>
                                             <property name="action-name">queue.add-folder</property>
                                             <style>
-                                              <class name="pill" />
+                                              <class name="pill"/>
                                             </style>
                                           </object>
                                         </child>
@@ -67,7 +71,7 @@
                                             <property name="label" translatable="yes">Add Song</property>
                                             <property name="action-name">queue.add-song</property>
                                             <style>
-                                              <class name="pill" />
+                                              <class name="pill"/>
                                             </style>
                                           </object>
                                         </child>
@@ -77,6 +81,7 @@
                                 </property>
                               </object>
                             </property>
+
                           </object>
                         </property>
                       </object>
@@ -88,162 +93,112 @@
                           <object class="AdwOverlaySplitView" id="split_view">
                             <property name="max-sidebar-width">330</property>
                             <property name="sidebar-width-fraction">0.4</property>
+
                             <property name="content">
                               <object class="AdwToolbarView">
+
+                                <!-- Header Bar -->
                                 <child type="top">
                                   <object class="AdwHeaderBar">
                                     <property name="show-title">false</property>
                                   </object>
                                 </child>
+
                                 <property name="content">
-                                  <object class="GtkScrolledWindow">
-                                    <property name="hscrollbar-policy">never</property>
-                                    <property name="vscrollbar-policy">automatic</property>
-                                    <property name="min-content-height">300</property>
+                                  <object class="GtkBox" id="main_box">
+                                    <property name="orientation">vertical</property>
+                                    <property name="valign">center</property>
                                     <property name="vexpand">true</property>
-                                    <property name="child">
-                                      <object class="GtkBox" id="main_box">
-                                        <property name="orientation">vertical</property>
-                                        <property name="valign">center</property>
-                                        <property name="vexpand">true</property>
-                                        <property name="spacing">6</property>
-                                        <style>
-                                          <class name="main-box" />
-                                        </style>
-                                        <child>
-                                          <object class="AmberolSongCover" id="song_cover">
+                                    <property name="spacing">6</property>
+                                    <style>
+                                      <class name="main-box"/>
+                                    </style>
+
+                                    <!-- Song cover -->
+                                    <child>
+                                      <object class="AmberolSongCover" id="song_cover">
                                       </object>
-                                        </child>
+                                    </child>
+
+                                    <!-- Song position -->
+                                    <child>
+                                      <object class="GtkBox">
+                                        <property name="orientation">vertical</property>
+                                        <property name="spacing">2</property>
+                                        <property name="width-request">256</property>
                                         <child>
                                           <object class="GtkBox">
-                                            <property name="orientation">vertical</property>
-                                            <property name="spacing">2</property>
-                                            <property name="width-request">256</property>
-                                            <child>
-                                              <object class="GtkBox">
-                                                <property name="halign">center</property>
-                                                <child>
-                                                  <object class="AmberolWaveformView" id="waveform_view">
-                                                    <property name="can-focus">true</property>
-                                                  </object>
-                                                </child>
-                                              </object>
-                                            </child>
-                                            <child>
-                                              <object class="GtkCenterBox">
-                                                <property name="orientation">horizontal</property>
-                                                <property name="width-request">256</property>
-                                                <property name="halign">center</property>
-                                                <child type="start">
-                                                  <object class="GtkLabel" id="elapsed_label">
-                                                    <property name="label">0:00</property>
-                                                    <accessibility>
-                                                      <property name="label" translatable="yes" context="a11y">Elapsed time</property>
-                                                    </accessibility>
-                                                    <style>
-                                                      <class name="caption" />
-                                                      <class name="numeric" />
-                                                    </style>
-                                                  </object>
-                                                </child>
-                                                <child type="end">
-                                                  <object class="GtkLabel" id="remaining_label">
-                                                    <property name="label">0:00</property>
-                                                    <accessibility>
-                                                      <property name="label" translatable="yes" context="a11y">Remaining time</property>
-                                                    </accessibility>
-                                                    <style>
-                                                      <class name="caption" />
-                                                      <class name="numeric" />
-                                                    </style>
-                                                  </object>
-                                                </child>
-                                              </object>
-                                            </child>
-                                          </object>
-                                        </child>
-                                        <child>
-                                          <object class="AmberolSongDetails" id="song_details" />
-                                        </child>
-                                        <child>
-                                          <object class="GtkBox" id="lyrics_box">
-                                            <property name="orientation">vertical</property>
-                                            <property name="spacing">6</property>
-                                            <property name="margin-start">24</property>
-                                            <property name="margin-end">24</property>
-                                            <style>
-                                              <class name="lyrics-panel" />
-                                            </style>
-                                            <child>
-                                              <object class="GtkLabel" id="lyric_current">
-                                                <property name="label">未找到同名 LRC 歌词</property>
-                                                <property name="wrap">true</property>
-                                                <property name="justify">center</property>
-                                                <property name="lines">2</property>
-                                                <property name="ellipsize">end</property>
-                                                <style>
-                                                  <class name="heading" />
-                                                </style>
-                                              </object>
-                                            </child>
-                                            <child>
-                                              <object class="GtkLabel" id="lyric_next">
-                                                <property name="wrap">true</property>
-                                                <property name="lines">2</property>
-                                                <property name="ellipsize">end</property>
-                                                <style>
-                                                  <class name="dim-label" />
-                                                </style>
-                                              </object>
-                                            </child>
-                                            <child>
-                                              <object class="GtkBox">
-                                                <property name="halign">center</property>
-                                                <property name="spacing">8</property>
-                                                <child>
-                                                  <object class="GtkLabel">
-                                                    <property name="label">歌词偏移（毫秒）</property>
-                                                  </object>
-                                                </child>
-                                                <child>
-                                                  <object class="GtkSpinButton" id="lyric_offset">
-                                                    <property name="numeric">true</property>
-                                                    <property name="tooltip-text">正值让歌词提前，负值让歌词延后</property>
-                                                    <property name="adjustment">
-                                                      <object class="GtkAdjustment">
-                                                        <property name="lower">-10000</property>
-                                                        <property name="upper">10000</property>
-                                                        <property name="step-increment">100</property>
-                                                        <property name="page-increment">1000</property>
-                                                      </object>
-                                                    </property>
-                                                  </object>
-                                                </child>
-                                              </object>
-                                            </child>
-                                          </object>
-                                        </child>
-                                        <child>
-                                          <object class="AmberolPlaybackControl" id="playback_control">
                                             <property name="halign">center</property>
-                                            <property name="margin-top">0</property>
-                                            <property name="margin-bottom">24</property>
+                                            <child>
+                                              <object class="AmberolWaveformView" id="waveform_view">
+                                                <property name="can-focus">true</property>
+                                              </object>
+                                            </child>
+                                          </object>
+                                        </child>
+                                        <child>
+                                          <object class="GtkCenterBox">
+                                            <property name="orientation">horizontal</property>
+                                            <property name="width-request">256</property>
+                                            <property name="halign">center</property>
+                                            <child type="start">
+                                              <object class="GtkLabel" id="elapsed_label">
+                                                <property name="label">0:00</property>
+                                                <accessibility>
+                                                  <property name="label" translatable="yes" context="a11y">Elapsed time</property>
+                                                </accessibility>
+                                                <style>
+                                                  <class name="caption"/>
+                                                  <class name="numeric"/>
+                                                </style>
+                                              </object>
+                                            </child>
+                                            <child type="end">
+                                              <object class="GtkLabel" id="remaining_label">
+                                                <property name="label">0:00</property>
+                                                <accessibility>
+                                                  <property name="label" translatable="yes" context="a11y">Remaining time</property>
+                                                </accessibility>
+                                                <style>
+                                                  <class name="caption"/>
+                                                  <class name="numeric"/>
+                                                </style>
+                                              </object>
+                                            </child>
                                           </object>
                                         </child>
                                       </object>
-                                    </property>
+                                    </child>
+
+                                    <!-- Song details -->
+                                    <child>
+                                      <object class="AmberolSongDetails" id="song_details"/>
+                                    </child>
+
+                                    <!-- Playback and queue controls -->
+                                    <child>
+                                      <object class="AmberolPlaybackControl" id="playback_control">
+                                        <property name="halign">center</property>
+                                        <property name="margin-top">0</property>
+                                        <property name="margin-bottom">24</property>
+                                      </object>
+                                    </child>
                                   </object>
+
                                 </property>
                               </object>
                             </property>
+
+                            <!-- Playlist view -->
                             <property name="sidebar">
-                              <object class="AmberolPlaylistView" id="playlist_view" />
+                              <object class="AmberolPlaylistView" id="playlist_view"/>
                             </property>
                           </object>
                         </property>
                       </object>
                     </child>
                   </object>
+
                 </property>
               </object>
             </property>

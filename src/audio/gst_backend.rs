@@ -140,8 +140,8 @@ impl GstBackend {
         let tick_sender = sender.clone();
         let tick = glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
             if let Some(position) = tick_pipeline.query_position::<gst::ClockTime>() {
-                let _ = tick_sender
-                    .send_blocking(PlaybackAction::UpdatePositionMs(position.mseconds()));
+                let _ =
+                    tick_sender.send_blocking(PlaybackAction::UpdatePosition(position.seconds()));
             }
             glib::ControlFlow::Continue
         });

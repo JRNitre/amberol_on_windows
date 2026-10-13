@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <interface>
-  <requires lib="gtk" version="4.0" />
+  <requires lib="gtk" version="4.0"/>
   <template class="AmberolPlaybackControl" parent="GtkWidget">
     <child>
+
       <object class="GtkBox" id="center_box">
         <property name="orientation">vertical</property>
         <property name="spacing">6</property>
@@ -19,7 +20,7 @@
                 <property name="valign">center</property>
                 <property name="tooltip-text" translatable="yes">Play the Previous Song</property>
                 <style>
-                  <class name="circular" />
+                  <class name="circular"/>
                 </style>
                 <accessibility>
                   <property name="label" translatable="yes" context="a11y">Skip backwards</property>
@@ -33,8 +34,8 @@
                 <property name="valign">center</property>
                 <property name="tooltip-text" translatable="yes">Toggle Play</property>
                 <style>
-                  <class name="circular" />
-                  <class name="large" />
+                  <class name="circular"/>
+                  <class name="large"/>
                 </style>
                 <accessibility>
                   <property name="label" translatable="yes" context="a11y">Toggle play</property>
@@ -48,7 +49,7 @@
                 <property name="valign">center</property>
                 <property name="tooltip-text" translatable="yes">Play the Next Song</property>
                 <style>
-                  <class name="circular" />
+                  <class name="circular"/>
                 </style>
                 <accessibility>
                   <property name="label" translatable="yes" context="a11y">Skip forward</property>
@@ -76,7 +77,7 @@
                     <property name="valign">center</property>
                     <property name="tooltip-text" translatable="yes">Toggle Playlist</property>
                     <style>
-                      <class name="circular" />
+                      <class name="circular"/>
                     </style>
                     <accessibility>
                       <property name="label" translatable="yes" context="a11y">Toggle playlist</property>
@@ -93,7 +94,7 @@
                       <property name="label" translatable="yes" context="a11y">Shuffle</property>
                     </accessibility>
                     <style>
-                      <class name="circular" />
+                      <class name="circular"/>
                     </style>
                   </object>
                 </child>
@@ -111,7 +112,7 @@
                     <property name="valign">center</property>
                     <property name="tooltip-text" translatable="yes">Enable Repeat</property>
                     <style>
-                      <class name="circular" />
+                      <class name="circular"/>
                     </style>
                     <accessibility>
                       <property name="label" translatable="yes" context="a11y">Repeat</property>
@@ -128,7 +129,7 @@
                     <property name="tooltip-text" translatable="yes">Main Menu</property>
                     <property name="direction">up</property>
                     <style>
-                      <class name="circular" />
+                      <class name="circular"/>
                     </style>
                     <accessibility>
                       <property name="label" translatable="yes" context="a11y">Primary menu</property>
@@ -140,116 +141,11 @@
           </object>
         </child>
       </object>
+
     </child>
   </template>
+
   <menu id="primary_menu">
-    <section>
-      <submenu>
-        <attribute name="label">外观与窗口</attribute>
-        <item>
-          <attribute name="label">磨砂背景</attribute>
-          <attribute name="action">win.glass-background</attribute>
-        </item>
-        <item>
-          <attribute name="label">迷你播放器</attribute>
-          <attribute name="action">win.mini</attribute>
-        </item>
-        <item>
-          <attribute name="label">窗口置顶</attribute>
-          <attribute name="action">win.topmost</attribute>
-        </item>
-        <item>
-          <attribute name="label">显示歌词</attribute>
-          <attribute name="action">win.show-lyrics</attribute>
-        </item>
-      </submenu>
-    </section>
-    <section>
-      <submenu>
-        <attribute name="label">歌单与收藏</attribute>
-        <item>
-          <attribute name="label">收藏 / 取消收藏当前歌曲</attribute>
-          <attribute name="action">win.favorite</attribute>
-        </item>
-        <item>
-          <attribute name="label">打开收藏</attribute>
-          <attribute name="action">win.favorites</attribute>
-        </item>
-        <item>
-          <attribute name="label">保存当前队列为歌单…</attribute>
-          <attribute name="action">win.save-playlist</attribute>
-        </item>
-        <item>
-          <attribute name="label">打开已保存歌单…</attribute>
-          <attribute name="action">win.open-playlist</attribute>
-        </item>
-        <item>
-          <attribute name="label">导入 M3U 歌单…</attribute>
-          <attribute name="action">win.import-playlist</attribute>
-        </item>
-        <item>
-          <attribute name="label">导出 M3U 歌单…</attribute>
-          <attribute name="action">win.export-playlist</attribute>
-        </item>
-      </submenu>
-    </section>
-    <section>
-      <submenu>
-        <attribute name="label">播放设置</attribute>
-        <item>
-          <attribute name="label">启动时恢复播放状态</attribute>
-          <attribute name="action">win.restore-session</attribute>
-        </item>
-        <item>
-          <attribute name="label">恢复后自动播放</attribute>
-          <attribute name="action">win.resume-playing</attribute>
-        </item>
-        <item>
-          <attribute name="label">播放 / 暂停淡入淡出</attribute>
-          <attribute name="action">win.fade-playback</attribute>
-        </item>
-      </submenu>
-    </section>
-    <section>
-      <submenu>
-        <attribute name="label">睡眠定时</attribute>
-        <item>
-          <attribute name="label">30 分钟</attribute>
-          <attribute name="action">win.sleep</attribute>
-          <attribute name="target" type="u">30</attribute>
-        </item>
-        <item>
-          <attribute name="label">60 分钟</attribute>
-          <attribute name="action">win.sleep</attribute>
-          <attribute name="target" type="u">60</attribute>
-        </item>
-        <item>
-          <attribute name="label">90 分钟</attribute>
-          <attribute name="action">win.sleep</attribute>
-          <attribute name="target" type="u">90</attribute>
-        </item>
-        <item>
-          <attribute name="label">取消定时</attribute>
-          <attribute name="action">win.sleep</attribute>
-          <attribute name="target" type="u">0</attribute>
-        </item>
-      </submenu>
-      <submenu>
-        <attribute name="label">A–B 循环</attribute>
-        <item>
-          <attribute name="label">标记 A 点</attribute>
-          <attribute name="action">win.loop-a</attribute>
-        </item>
-        <item>
-          <attribute name="label">标记 B 点并循环</attribute>
-          <attribute name="action">win.loop-b</attribute>
-        </item>
-        <item>
-          <attribute name="label">取消循环</attribute>
-          <attribute name="action">win.loop-clear</attribute>
-        </item>
-      </submenu>
-    </section>
     <section>
       <item>
         <attribute name="label" translatable="yes">Copy</attribute>
@@ -265,7 +161,6 @@
         <attribute name="label" translatable="yes">Add _Folder</attribute>
         <attribute name="action">queue.add-folder</attribute>
       </item>
-      <item><attribute name="label">最近打开的文件夹…</attribute><attribute name="action">win.recent-folder</attribute></item>
       <item>
         <attribute name="label" translatable="yes">Clear</attribute>
         <attribute name="action">queue.clear</attribute>
@@ -280,6 +175,11 @@
         <attribute name="label" translatable="yes">_Background Playback</attribute>
         <attribute name="action">app.background-play</attribute>
       </item>
+    </section>
+    <section>
+      <item><attribute name="label">启动时恢复播放状态</attribute><attribute name="action">win.restore-session</attribute></item>
+      <item><attribute name="label">恢复后自动播放</attribute><attribute name="action">win.resume-playing</attribute></item>
+      <item><attribute name="label">播放 / 暂停淡入淡出</attribute><attribute name="action">win.fade-playback</attribute></item>
     </section>
     <section>
       <submenu>

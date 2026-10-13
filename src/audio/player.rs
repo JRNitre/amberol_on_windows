@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     fmt::{self, Display, Formatter},
     rc::Rc,
 };
@@ -28,7 +28,7 @@ pub enum PlaybackAction {
     SkipPrevious,
     SkipNext,
 
-    UpdatePositionMs(u64),
+    UpdatePosition(u64),
     VolumeChanged(f64),
     Repeat(RepeatMode),
     Seek(u64),
@@ -118,9 +118,6 @@ pub struct AudioPlayer {
     queue: Queue,
     state: PlayerState,
     waveform_generator: WaveformGenerator,
-    loop_a: Cell<Option<u64>>,
-    loop_b: Cell<Option<u64>>,
-    sleep_deadline: Cell<Option<std::time::Instant>>,
 }
 
 impl fmt::Debug for AudioPlayer {
@@ -140,7 +137,9 @@ impl AudioPlayer {
         controllers.push(Box::new(media_controller.clone()));
 
         let inhibit_controller = InhibitController::new();
-        controllers.push(Box::new(inhibit_controller));
+        if !cfg!(test) {
+            controllers.push(Box::new(inhibit_controller));
+        }
 
         let waveform_generator = WaveformGenerator::new();
         controllers.push(Box::new(waveform_generator.clone()));
@@ -159,16 +158,13 @@ impl AudioPlayer {
             queue,
             state,
             waveform_generator,
-            loop_a: Cell::new(None),
-            loop_b: Cell::new(None),
-            sleep_deadline: Cell::new(None),
         });
 
         res.clone().setup_channel();
         res.state.connect_notify_local(
             Some("song"),
             clone!(@weak res => move |_, _| {
-                res.clear_loop(); res.refresh_next();
+                res.refresh_next();
             }),
         );
         res.queue.connect_notify_local(
@@ -207,7 +203,7 @@ impl AudioPlayer {
             PlaybackAction::Stop => self.set_playback_state(PlaybackState::Stopped),
             PlaybackAction::SkipPrevious => self.skip_previous(),
             PlaybackAction::SkipNext => self.skip_next(),
-            PlaybackAction::UpdatePositionMs(pos) => self.update_position(pos),
+            PlaybackAction::UpdatePosition(pos) => self.update_position(pos),
             PlaybackAction::VolumeChanged(vol) => self.set_volume(vol),
             PlaybackAction::PlayNext => self.play_next(),
             PlaybackAction::StreamStarted(uri) => self.stream_started(&uri),
@@ -277,11 +273,8 @@ impl AudioPlayer {
     }
 
     fn refresh_next(&self) {
-        self.backend.set_next_uri(if self.loop_b.get().is_none() {
-            self.queue.peek_next_song().map(|s| s.uri())
-        } else {
-            None
-        });
+        self.backend
+            .set_next_uri(self.queue.peek_next_song().map(|s| s.uri()));
     }
 
     fn stream_started(&self, uri: &str) {
@@ -310,47 +303,6 @@ impl AudioPlayer {
         self.backend.restore_position(position);
         self.state.set_playback_state(&PlaybackState::Paused);
         self.state.set_position(position);
-    }
-
-    pub fn set_sleep_timer(&self, minutes: u32) {
-        self.sleep_deadline.set(if minutes == 0 {
-            None
-        } else {
-            Some(std::time::Instant::now() + std::time::Duration::from_secs(minutes as u64 * 60))
-        });
-    }
-    pub fn check_sleep_timer(&self) {
-        if self
-            .sleep_deadline
-            .get()
-            .map(|t| std::time::Instant::now() >= t)
-            .unwrap_or(false)
-        {
-            self.sleep_deadline.set(None);
-            self.pause();
-        }
-    }
-    pub fn set_loop_a(&self) {
-        self.loop_a.set(Some(self.state.position()));
-        self.loop_b.set(None);
-        self.refresh_next();
-    }
-    pub fn set_loop_b(&self) -> bool {
-        if let Some(a) = self.loop_a.get() {
-            let b = self.state.position();
-            if b > a {
-                self.loop_b.set(Some(b));
-                self.refresh_next();
-                self.seek_position_abs(a);
-                return true;
-            }
-        }
-        false
-    }
-    pub fn clear_loop(&self) {
-        self.loop_a.set(None);
-        self.loop_b.set(None);
-        self.refresh_next();
     }
 
     pub fn toggle_play(&self) {
@@ -569,16 +521,10 @@ impl AudioPlayer {
     }
 
     fn update_position(&self, position: u64) {
-        if let (Some(a), Some(b)) = (self.loop_a.get(), self.loop_b.get()) {
-            if self.state.playing() && position / 1000 >= b {
-                self.backend.seek_position(a);
-                return;
-            }
-        }
-        self.state.set_position_ms(position);
+        self.state.set_position(position);
 
         for c in &self.controllers {
-            c.set_position(position / 1000);
+            c.set_position(position);
         }
     }
 
@@ -753,9 +699,6 @@ mod tests {
             player.state.position() < 2,
             "repeat-one starts the next cycle"
         );
-        player.sleep_deadline.set(Some(std::time::Instant::now()));
-        player.check_sleep_timer();
-        assert!(!player.state.playing(), "sleep deadline pauses playback");
         player.stop();
         drop(player);
         spin(&context, 100);
