@@ -1,119 +1,61 @@
-Amberol
-=======
+# Amberol for Windows
 
-![Application icon](./data/icons/hicolor/scalable/apps/io.bassi.Amberol.svg)
+[简体中文](README.zh-CN.md)
 
-A small and simple sound and music player that is well integrated with GNOME.
+![Amberol icon](data/icons/hicolor/scalable/apps/io.bassi.Amberol.svg)
 
-Amberol aspires to be as small, unintrusive, and simple as possible. It does
-not manage your music collection; it does not let you manage playlists, smart
-or otherwise; it does not let you edit the metadata for your songs; it does
-not show you lyrics for your songs, or the Wikipedia page for your bands.
+This is a Windows port of [Amberol](https://gitlab.gnome.org/World/amberol), a simple music player originally created by Emmanuele Bassi. The Windows port is maintained by **JRNitre**. It retains the original project's copyright and license notices.
 
-Amberol plays music, and nothing else.
+The port provides native Windows playback, Windows media controls, a seekable waveform, and a Simplified Chinese interface. The portable package includes GTK, GStreamer, translations, and audio plugins for common formats. The source project remains buildable with the MSYS2 UCRT64 toolchain.
 
-![Full UI](./data/screenshots/amberol-full.png)
-![Compact UI](./data/screenshots/amberol-compact.png)
+## Run the portable build
 
-Flatpak builds
---------------
+1. Obtain `amberol-windows-portable.zip`. A local test package may be present in `release/`; this directory is intentionally excluded from Git.
+2. Extract the ZIP completely.
+3. Double-click `Amberol.exe` in the extracted folder.
 
-The recommended way of installing Amberol is through Flatpak. If you don't have
-Flatpak installed, you can get it from [the Flatpak website](https://flatpak.org/setup).
+Keep the DLL files and the `lib/` and `share/` directories beside the executable. The portable build does not require a batch file or an MSYS2 installation on the user's computer. It is a folder-based package, not a single-file executable or an installer.
 
-You can install stable builds of Amberol from [Flathub](https://flathub.org)
-by using this command:
+## Build from source
 
-    flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-    flatpak install flathub io.bassi.Amberol
+Use a 64-bit Windows system with [MSYS2](https://www.msys2.org/) installed at `C:\msys64`. Open the **MSYS2 UCRT64** terminal and install the build and runtime dependencies:
 
-Windows development build
--------------------------
+```sh
+pacman -Syu
+pacman -S --needed mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-rust mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-libadwaita mingw-w64-ucrt-x86_64-gstreamer mingw-w64-ucrt-x86_64-gst-plugins-base mingw-w64-ucrt-x86_64-gst-plugins-good mingw-w64-ucrt-x86_64-gst-plugins-bad mingw-w64-ucrt-x86_64-gettext-tools
+```
 
-Amberol can be built as a native Windows program with the MSYS2 UCRT64 toolchain.
-Open the **MSYS2 UCRT64** terminal, update MSYS2, then install the build and
-runtime packages:
+If MSYS2 asks you to restart the terminal after the update, do so before installing packages. From the repository root, run:
 
-    pacman -Syu
-    pacman -S --needed mingw-w64-ucrt-x86_64-toolchain mingw-w64-ucrt-x86_64-rust mingw-w64-ucrt-x86_64-meson mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-libadwaita mingw-w64-ucrt-x86_64-gstreamer mingw-w64-ucrt-x86_64-gst-plugins-base mingw-w64-ucrt-x86_64-gst-plugins-good mingw-w64-ucrt-x86_64-gst-plugins-bad mingw-w64-ucrt-x86_64-gettext-tools
+```sh
+meson setup build-win --prefix="$(cygpath -m /ucrt64)"
+meson compile -C build-win
+```
 
-From this source directory, run:
+To run the development build in the configured environment:
 
-    meson setup build-win --prefix="$(cygpath -m /ucrt64)"
-    meson compile -C build-win
-    meson devenv -C build-win build-win/src/amberol.exe
+```sh
+meson devenv -C build-win build-win/src/amberol.exe
+```
 
-The development environment supplies the GSettings schema and other data files.
-For an installed build, run `meson install -C build-win`, then launch
-`/ucrt64/bin/amberol.exe` from UCRT64. GStreamer codecs and the GTK runtime must
-remain installed. This is a development build procedure, not a standalone
-installer. System media controls use Souvlaki: MPRIS on Linux and Windows media
-controls on Windows. Unix platforms, including FreeBSD, use MPRIS.
+## Make a portable ZIP
 
-To assemble a portable Windows package, run
-`python build-aux/package-windows.py` after compiling. It copies `Amberol.exe`,
-its UCRT64 DLL dependencies, GTK data, translations, and common GStreamer audio
-plugins into `dist/amberol-windows-portable`, then creates
-`dist/amberol-windows-portable.zip`.
-Users can extract the ZIP and double-click `Amberol.exe`; the whole extracted
-folder must remain together. The executable locates the bundled resources and
-selects Simplified Chinese without a batch file. Re-run the packaging command
-after changing the binary. Review bundled library licenses and test supported
-audio formats before redistribution. While waveform analysis runs, a seekable
-progress line remains visible; completed waveforms are cached.
+After the release build completes, run this from the repository root:
 
-<a href="https://flathub.org/apps/details/io.bassi.Amberol"><img src="https://flathub.org/api/badge?svg&locale=en" width="200"/></a>
+```sh
+python build-aux/package-windows.py
+```
 
-Getting in touch
-----------------
+The script creates `dist/amberol-windows-portable/Amberol.exe` and `dist/amberol-windows-portable.zip`. It uses `C:\msys64\ucrt64` by default; pass `--ucrt PATH` if MSYS2 is installed elsewhere. Rebuild and repackage after changing the source. Build outputs and ZIP files are excluded from Git.
 
-If you have questions about Amberol, you can join the [`#amberol:gnome.org`](https://matrix.to/#/#amberol:gnome.org)
-channel on Matrix, or use the [GNOME Discourse instance](https://discourse.gnome.org/c/applications/7).
+## Repository layout
 
-Contributing
-------------
+- `src/`: Rust application and Windows media control implementation.
+- `data/`: application icons, metadata, and GSettings schema.
+- `po/`: translations, including Simplified Chinese.
+- `build-aux/package-windows.py`: portable package assembly.
+- `LICENSES/`: license texts retained from the original project.
 
-Please, see the [contribution guide](./CONTRIBUTING.md) if you wish to report
-and issue, fix a bug, or implement a new feature.
+## Credits and license
 
-How to obtain debugging information
------------------------------------
-
-Run Amberol from your terminal using:
-
-    RUST_BACKTRACE=1 RUST_LOG=amberol=debug flatpak run io.bassi.Amberol
-
-to obtain a full debug log.
-
-Translations
-------------
-
-Amberol is translated on the [GNOME translation platform](https://l10n.gnome.org/module/amberol).
-
-You should contact the coordinator of [the localization team for your language](https://l10n.gnome.org/teams/)
-if you have questions.
-
-For more information, please see the [GNOME Translation Project wiki](https://wiki.gnome.org/TranslationProject).
-
-Code of conduct
----------------
-
-Amberol follows the GNOME project [Code of Conduct](./code-of-conduct.md). All
-communications in project spaces, such as the issue tracker or
-[Discourse](https://discourse.gnome.org) are expected to follow it.
-
-Why is it called "Amberol"?
----------------------------
-
-The name comes from the the [Blue Amberol
-Records](https://en.wikipedia.org/wiki/Blue_Amberol_Records), a type of cylinder
-records made of (blue) nitrocellulose, capable of playback durations of around
-four minutes, just about the length of the average song since 1990.
-
-Copyright and licensing
------------------------
-
-Copyright 2022  Emmanuele Bassi
-
-Amberol is released under the terms of the GNU General Public License, either
-version 3.0 or, at your option, any later version.
+Amberol was created by **Emmanuele Bassi**. The Windows port is by **JRNitre**. The project is licensed under GPL-3.0-or-later; see [LICENSES/GPL-3.0-or-later.txt](LICENSES/GPL-3.0-or-later.txt). The repository URL for this Windows port has not been set yet. Before public redistribution, review the licenses of the bundled runtime libraries and provide the corresponding source as required by their licenses.
