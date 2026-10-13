@@ -58,4 +58,8 @@ The script creates `dist/amberol-windows-portable/Amberol.exe` and `dist/amberol
 
 ## Credits and license
 
-Amberol was created by **Emmanuele Bassi**. The Windows port is by **JRNitre**. The project is licensed under GPL-3.0-or-later; see [LICENSES/GPL-3.0-or-later.txt](LICENSES/GPL-3.0-or-later.txt). The repository URL for this Windows port has not been set yet. Before public redistribution, review the licenses of the bundled runtime libraries and provide the corresponding source as required by their licenses.
+Amberol was created by **Emmanuele Bassi**. The Windows port is by **JRNitre**.
+
+Built with ChatGPT 6 Sol.
+
+The project is licensed under GPL-3.0-or-later; see [LICENSES/GPL-3.0-or-later.txt](LICENSES/GPL-3.0-or-later.txt). The repository URL for this Windows port has not been set yet. Before public redistribution, review the licenses of the bundled runtime libraries and provide the corresponding source as required by their licenses.
