@@ -1,0 +1,11 @@
+*.json~
+
+src/config.rs
+
+target
+dist/
+
+# Windows port build output
+build/
+build-win/
+release/
